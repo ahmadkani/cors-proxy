@@ -60,14 +60,58 @@ function getPID(strict) {
   }
 }
 
+let reqCounter = 0;
+function getReqId() {
+  return (reqCounter++).toString(16).padStart(4, '0');
+}
+
 switch (cmd) {
   case 'run': {
-    const server = createServer(handleRequest);
-    server.listen(port, () => console.log('Listening on port', port));
+    const server = createServer((req, res) => {
+      const reqId = getReqId();
+      const startTime = Date.now();
+
+      if (req.url && req.url.startsWith('//')) {
+        const fixedUrl = req.url.substring(1); // Remove one slash
+        console.log(`[${reqId}] 🛠️ URL FIX: Changed "${req.url}" -> "${fixedUrl}"`);
+        req.url = fixedUrl;
+      }
+
+      console.log(`\n[${reqId}] >>> ${req.method} ${req.url}`);
+      
+      const originalWriteHead = res.writeHead.bind(res);
+      res.writeHead = function(statusCode, ...args) {
+        const duration = Date.now() - startTime;
+        console.log(`[${reqId}] <<< Status: ${statusCode} (${duration}ms)`);
+        return originalWriteHead(statusCode, ...args);
+      };
+
+      try {
+        handleRequest(req, res);
+      } catch (err) {
+        console.error(`[${reqId}] ❌ Critical Server Error:`);
+        console.error(err);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Proxy Error');
+        }
+      }
+    });
+
+    process.on('unhandledRejection', (reason, promise) => {
+      console.error('\n❌ Unhandled Rejection (Network Error):');
+      console.error(reason);
+    });
+    
+    server.listen(port, () => {
+      console.log('✅ Listening on port', port);
+      console.log('🔍 Detailed logging enabled.');
+    });
+
     process.on('beforeExit', () => {
       console.log('Shutting down server');
       server.close();
-      unlinkSync(pidFile);
+      try { unlinkSync(pidFile); } catch (e) { /* ignore */ }
     });
     break;
   }
